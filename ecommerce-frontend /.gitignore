@@ -1,0 +1,39 @@
+# Environment
+.env
+.env.*
+!.env.example
+
+# Coverage / reports
+coverage
+.nyc_output
+
+# Tool caches
+.cache
+.parcel-cache
+.eslintcache
+
+# Runtime / temp artifacts
+*.pid
+*.pid.lock
+*.seed
+*.tmp
+tmp
+temp
+# mac
+.DS_Store
+
+# Node frontend
+ecommerce-frontend/node_modules
+ecommerce-frontend/dist
+ecommerce-frontend/.env
+
+# Python backend
+ecommerce-backend/.venv
+ecommerce-backend/__pycache__
+ecommerce-backend/*.pyc
+ecommerce-backend/db.sqlite3
+ecommerce-backend/.env
+
+# General
+.env
+venv/
