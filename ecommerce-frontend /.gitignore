@@ -37,3 +37,57 @@ ecommerce-backend/.env
 # General
 .env
 venv/
+# ===== OS =====
+.DS_Store
+
+# ===== ENV / secrets =====
+.env
+.env.*
+!.env.example
+
+# ===== Frontend (React/Vite) =====
+node_modules/
+dist/
+build/
+.vite/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# If frontend folder name is ecommerce-frontend or frontend
+ecommerce-frontend/node_modules/
+ecommerce-frontend/dist/
+ecommerce-frontend/build/
+ecommerce-frontend/.env
+frontend/node_modules/
+frontend/dist/
+frontend/build/
+frontend/.env
+
+# ===== Backend (Django/Python) =====
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.sqlite3
+db.sqlite3
+media/
+staticfiles/
+
+# If backend folder name is ecommerce-backend or backend
+ecommerce-backend/.venv/
+ecommerce-backend/venv/
+ecommerce-backend/__pycache__/
+ecommerce-backend/db.sqlite3
+ecommerce-backend/.env
+backend/.venv/
+backend/venv/
+backend/__pycache__/
+backend/db.sqlite3
+backend/.env
+
+# ===== IDE =====
+.vscode/
+.idea/
