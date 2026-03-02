@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { readJSON, writeJSON } from "../hooks/useLocalStorage";
+import { clearAuthTokens } from "../services/api/auth.api";
 
 const AUTH_KEY = "ec_auth_v1";
 const WISHLIST_KEY = "ec_wishlist_v1";
@@ -41,6 +42,7 @@ const useAuthStore = create((set, get) => ({
 
   logout: () => {
     writeJSON(AUTH_KEY, null);
+    clearAuthTokens();
     set({ user: null, role: null });
   },
 

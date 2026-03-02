@@ -1,0 +1,42 @@
+# OS
+.DS_Store
+
+# Env / secrets
+.env
+.env.*
+!.env.example
+
+# Node / frontend artifacts
+node_modules/
+dist/
+build/
+.vite/
+coverage/
+*.log
+
+# Python / backend artifacts
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.sqlite3
+db.sqlite3
+
+# Project-specific folders
+ecommerce-backend/.env
+ecommerce-backend/.venv/
+ecommerce-backend/db.sqlite3
+ecommerce-backend/__pycache__/
+ecommerce-backend/venv/
+
+# Handles existing frontend folder name with trailing space
+ecommerce-frontend\ /node_modules/
+ecommerce-frontend\ /dist/
+ecommerce-frontend\ /.env
+ecommerce-frontend\ /.vite/
+
+# If frontend folder is renamed without trailing space
+ecommerce-frontend/node_modules/
+ecommerce-frontend/dist/
+ecommerce-frontend/.env
+ecommerce-frontend/.vite/

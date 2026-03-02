@@ -3,6 +3,7 @@ import { useForm } from "react-hook-form";
 import { useEffect, useMemo, useState } from "react";
 import { Building2, CheckCircle2, ShieldCheck, Store, Truck, Wallet } from "lucide-react";
 import useAuthStore from "../../store/auth.store";
+import { loginUser } from "../../services/api/auth.api";
 
 const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID || "";
 
@@ -12,6 +13,9 @@ export default function Login() {
   const [selectedRole, setSelectedRole] = useState("customer");
   const [showGooglePicker, setShowGooglePicker] = useState(false);
   const [manualGoogleEmail, setManualGoogleEmail] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
+  const [backendError, setBackendError] = useState("");
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   const rememberedGoogleAccounts = useMemo(
     () => [
@@ -42,35 +46,36 @@ export default function Login() {
     document.body.appendChild(script);
   }, []);
 
-  function onSubmit(values) {
-    const vendorOrg = String(values.organizationName || "").trim();
-
-    login(
-      {
-        id: values.email,
-        name: selectedRole === "vendor" ? vendorOrg : "Customer User",
-        email: values.email,
-        organizationName: selectedRole === "vendor" ? vendorOrg : null,
-      },
-      selectedRole
-    );
-
-    navigate(selectedRole === "vendor" ? "/vendor/dashboard" : "/products");
+  async function onSubmit(values) {
+    setBackendError("");
+    setIsSubmitting(true);
+    try {
+      const response = await loginUser({
+        email: String(values.email || "").trim().toLowerCase(),
+        password: values.password,
+        role: selectedRole,
+      });
+      const user = response.user;
+      login(
+        {
+          id: user.id,
+          name: user.name,
+          email: user.email,
+          organizationName: user.organizationName ?? null,
+        },
+        user.role
+      );
+      navigate(user.role === "vendor" ? "/vendor/dashboard" : "/products");
+    } catch (error) {
+      setBackendError(error.message);
+    } finally {
+      setIsSubmitting(false);
+    }
   }
 
   async function loginWithGoogleEmail(email) {
     if (!email) return;
-
-    login(
-      {
-        id: email,
-        name: email.split("@")[0],
-        email,
-      },
-      "customer"
-    );
-
-    navigate("/products");
+    setBackendError("Google login is not connected to backend password auth yet. Please login with registered email and password.");
   }
 
   async function handleGoogleLogin() {
@@ -217,15 +222,24 @@ export default function Login() {
               </Field>
 
               <Field label="Password" error={errors.password?.message}>
-                <input
-                  type="password"
-                  {...register("password", {
-                    required: "Password is required",
-                    minLength: { value: 6, message: "Min 6 characters" },
-                  })}
-                  placeholder="••••••••"
-                  className="w-full rounded-2xl border border-slate-300/70 bg-slate-900/5 px-3 py-3 text-sm font-extrabold outline-none focus:ring-2 focus:ring-blue-200 placeholder:text-slate-600"
-                />
+                <div className="relative">
+                  <input
+                    type={showPassword ? "text" : "password"}
+                    {...register("password", {
+                      required: "Password is required",
+                      minLength: { value: 6, message: "Min 6 characters" },
+                    })}
+                    placeholder="••••••••"
+                    className="w-full rounded-2xl border border-slate-300/70 bg-slate-900/5 px-3 py-3 pr-16 text-sm font-extrabold outline-none focus:ring-2 focus:ring-blue-200 placeholder:text-slate-600"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword((prev) => !prev)}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-xs font-black text-slate-700 hover:text-slate-950"
+                  >
+                    {showPassword ? "Hide" : "Show"}
+                  </button>
+                </div>
               </Field>
 
               {selectedRole === "vendor" ? (
@@ -243,8 +257,18 @@ export default function Login() {
                 </Field>
               ) : null}
 
-              <button className="w-full ec-btn-primary py-3">
-                {selectedRole === "vendor" ? "Login to Vendor Panel" : "Login"}
+              {backendError ? (
+                <div className="rounded-xl border border-rose-300 bg-rose-50 px-3 py-2 text-sm font-black text-rose-700">
+                  {backendError}
+                </div>
+              ) : null}
+
+              <button className="w-full ec-btn-primary py-3 disabled:opacity-60" disabled={isSubmitting}>
+                {isSubmitting
+                  ? "Please wait..."
+                  : selectedRole === "vendor"
+                    ? "Login to Vendor Panel"
+                    : "Login"}
               </button>
 
               <p className="text-xs text-slate-700 text-center">
