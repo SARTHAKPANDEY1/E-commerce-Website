@@ -1,15 +1,18 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { useForm } from "react-hook-form";
 import { useQueryClient } from "@tanstack/react-query";
 import useCartStore from "../../store/cart.store";
 import useProductsStore from "../../store/products.store";
 import { formatCurrency } from "../../utils/formatCurrency";
 import EmptyState from "../../components/common/EmptyState";
+import { placeOrder } from "../../services/api/orders.api";
 
 export default function Checkout() {
   const queryClient = useQueryClient();
   const { items, clear } = useCartStore();
   const applyCheckout = useProductsStore((s) => s.applyCheckout);
+  const [isPlacingOrder, setIsPlacingOrder] = useState(false);
+  const [backendError, setBackendError] = useState("");
 
   const subtotal = useMemo(() => items.reduce((s, i) => s + i.price * i.qty, 0), [items]);
   const shipping = items.length ? 99 : 0;
@@ -19,13 +22,37 @@ export default function Checkout() {
     defaultValues: { fullName: "", phone: "", email: "", address: "", city: "", state: "", pincode: "" },
   });
 
-  function onSubmit(values) {
-    console.log("Checkout:", values);
-    applyCheckout(items);
-    queryClient.invalidateQueries({ queryKey: ["products"] });
-    queryClient.invalidateQueries({ queryKey: ["product"] });
-    alert("Order placed (mock). Later connect Django API here.");
-    clear();
+  async function onSubmit(values) {
+    setBackendError("");
+    setIsPlacingOrder(true);
+    try {
+      await placeOrder({
+        items: items.map((i) => ({
+          productId: Number(i.id),
+          quantity: Number(i.qty),
+          title: i.title,
+          price: Number(i.price),
+          image: i.image,
+        })),
+        fullName: values.fullName,
+        phone: values.phone,
+        email: values.email,
+        address: values.address,
+        city: values.city,
+        state: values.state,
+        pincode: values.pincode,
+      });
+      applyCheckout(items);
+      queryClient.invalidateQueries({ queryKey: ["products"] });
+      queryClient.invalidateQueries({ queryKey: ["product"] });
+      queryClient.invalidateQueries({ queryKey: ["my-orders"] });
+      alert("Order placed successfully.");
+      clear();
+    } catch (error) {
+      setBackendError(error.message || "Could not place order.");
+    } finally {
+      setIsPlacingOrder(false);
+    }
   }
 
   if (items.length === 0) {
@@ -131,8 +158,14 @@ export default function Checkout() {
               </Field>
             </div>
 
-            <button type="submit" className="mt-6 ec-btn-primary">
-              Place Order
+            {backendError ? (
+              <div className="mt-4 rounded-xl border border-rose-300 bg-rose-50 px-3 py-2 text-sm font-black text-rose-700">
+                {backendError}
+              </div>
+            ) : null}
+
+            <button type="submit" className="mt-6 ec-btn-primary disabled:opacity-60" disabled={isPlacingOrder}>
+              {isPlacingOrder ? "Placing Order..." : "Place Order"}
             </button>
 
             <p className="mt-3 text-xs text-slate-700">

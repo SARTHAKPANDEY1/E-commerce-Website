@@ -129,3 +129,142 @@ class PendingRegistration(models.Model):
 
     def verify_otp(self, raw_otp):
         return bool(self.otp_hash) and check_password(raw_otp, self.otp_hash)
+
+
+class Product(models.Model):
+    vendor = models.ForeignKey(
+        Vendor,
+        on_delete=models.CASCADE,
+        related_name="products",
+    )
+    name = models.CharField(max_length=200)
+    description = models.TextField(blank=True)
+    price = models.DecimalField(max_digits=10, decimal_places=2)
+    sku = models.CharField(max_length=80, unique=True)
+    stock_quantity = models.PositiveIntegerField(default=0)
+    reserved_quantity = models.PositiveIntegerField(default=0)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["vendor", "is_active"]),
+            models.Index(fields=["name"]),
+        ]
+
+    def __str__(self):
+        return f"{self.name} ({self.sku})"
+
+    @property
+    def available_quantity(self):
+        if self.stock_quantity <= self.reserved_quantity:
+            return 0
+        return self.stock_quantity - self.reserved_quantity
+
+
+class Order(models.Model):
+    STATUS_PENDING = "pending"
+    STATUS_CONFIRMED = "confirmed"
+    STATUS_SHIPPED = "shipped"
+    STATUS_DELIVERED = "delivered"
+    STATUS_CANCELLED = "cancelled"
+    STATUS_CHOICES = [
+        (STATUS_PENDING, "Pending"),
+        (STATUS_CONFIRMED, "Confirmed"),
+        (STATUS_SHIPPED, "Shipped"),
+        (STATUS_DELIVERED, "Delivered"),
+        (STATUS_CANCELLED, "Cancelled"),
+    ]
+
+    customer = models.ForeignKey(
+        User,
+        on_delete=models.CASCADE,
+        related_name="orders",
+        limit_choices_to={"role": User.ROLE_CUSTOMER},
+    )
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_PENDING)
+    subtotal_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    shipping_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    total_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    shipping_full_name = models.CharField(max_length=120, blank=True)
+    shipping_phone = models.CharField(max_length=20, blank=True)
+    shipping_email = models.EmailField(blank=True)
+    shipping_address = models.CharField(max_length=255, blank=True)
+    shipping_city = models.CharField(max_length=120, blank=True)
+    shipping_state = models.CharField(max_length=120, blank=True)
+    shipping_pincode = models.CharField(max_length=12, blank=True)
+    cancel_reason = models.TextField(blank=True)
+    cancelled_at = models.DateTimeField(null=True, blank=True)
+    placed_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-placed_at"]
+        indexes = [
+            models.Index(fields=["customer", "status"]),
+            models.Index(fields=["placed_at"]),
+        ]
+
+    def __str__(self):
+        return f"Order #{self.id} - {self.customer.email}"
+
+
+class OrderShippingDetail(models.Model):
+    order = models.OneToOneField(
+        Order,
+        on_delete=models.CASCADE,
+        related_name="shipping_detail",
+    )
+    full_name = models.CharField(max_length=120)
+    phone = models.CharField(max_length=20)
+    email = models.EmailField()
+    address = models.CharField(max_length=255)
+    city = models.CharField(max_length=120)
+    state = models.CharField(max_length=120)
+    pincode = models.CharField(max_length=12)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"Shipping for Order #{self.order_id}"
+
+
+class OrderItem(models.Model):
+    order = models.ForeignKey(
+        Order,
+        on_delete=models.CASCADE,
+        related_name="items",
+    )
+    product = models.ForeignKey(
+        Product,
+        on_delete=models.PROTECT,
+        related_name="order_items",
+    )
+    vendor = models.ForeignKey(
+        Vendor,
+        on_delete=models.PROTECT,
+        related_name="order_items",
+    )
+    quantity = models.PositiveIntegerField()
+    unit_price = models.DecimalField(max_digits=10, decimal_places=2)
+    line_total = models.DecimalField(max_digits=12, decimal_places=2)
+    product_name = models.CharField(max_length=200, blank=True)
+    product_image_url = models.URLField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["order", "product"],
+                name="unique_product_per_order",
+            )
+        ]
+
+    def __str__(self):
+        return f"Order #{self.order_id} - {self.product.name} x {self.quantity}"

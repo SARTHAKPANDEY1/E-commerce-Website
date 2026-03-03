@@ -7,7 +7,7 @@ from django.urls import reverse
 from rest_framework import status
 from rest_framework.test import APITestCase
 
-from .models import User
+from .models import Order, OrderShippingDetail, Product, User, Vendor
 
 
 @override_settings(EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend")
@@ -263,3 +263,141 @@ class AuthFlowTests(APITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertTrue(response.json()["ok"])
+
+    def test_vendor_product_crud_and_stock_update(self):
+        vendor_user = User.objects.create_user(
+            email="vendor-auth@example.com",
+            password="secret123",
+            role=User.ROLE_VENDOR,
+            name="Vendor Auth",
+        )
+        vendor_profile = Vendor.objects.create(
+            user=vendor_user,
+            business_name="Vendor Store",
+            login_email="vendor-login@example.com",
+        )
+
+        self.client.force_authenticate(user=vendor_user)
+
+        create_payload = {
+            "name": "Test Product",
+            "description": "Sample description",
+            "price": "499.00",
+            "sku": "SKU-TEST-001",
+            "stock_quantity": 10,
+            "reserved_quantity": 0,
+            "is_active": True,
+        }
+        create_response = self.client.post(reverse("vendor_products"), create_payload, format="json")
+        self.assertEqual(create_response.status_code, status.HTTP_201_CREATED)
+        product_id = create_response.data["id"]
+        self.assertEqual(create_response.data["vendorId"], vendor_profile.id)
+
+        list_response = self.client.get(reverse("vendor_products"))
+        self.assertEqual(list_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(list_response.data), 1)
+
+        update_response = self.client.patch(
+            reverse("vendor_product_stock_update", kwargs={"product_id": product_id}),
+            {"stock_quantity": 7},
+            format="json",
+        )
+        self.assertEqual(update_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(update_response.data["stock_quantity"], 7)
+
+        detail_response = self.client.get(reverse("vendor_product_detail", kwargs={"product_id": product_id}))
+        self.assertEqual(detail_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(detail_response.data["sku"], "SKU-TEST-001")
+
+    def test_customer_place_order_and_my_orders(self):
+        customer = User.objects.create_user(
+            email="buyer@example.com",
+            password="secret123",
+            role=User.ROLE_CUSTOMER,
+            name="Buyer",
+        )
+        vendor_user = User.objects.create_user(
+            email="seller-auth@example.com",
+            password="secret123",
+            role=User.ROLE_VENDOR,
+            name="Seller",
+        )
+        vendor_profile = Vendor.objects.create(
+            user=vendor_user,
+            business_name="Seller Store",
+            login_email="seller-login@example.com",
+        )
+        product = Product.objects.create(
+            vendor=vendor_profile,
+            name="Laptop Bag",
+            description="Waterproof bag",
+            price="1200.00",
+            sku="BAG-001",
+            stock_quantity=5,
+            reserved_quantity=0,
+            is_active=True,
+        )
+
+        self.client.force_authenticate(user=customer)
+        place_response = self.client.post(
+            reverse("place_order"),
+            {
+                "items": [{"productId": product.id, "quantity": 2, "title": "Laptop Bag", "price": "1200.00"}],
+                "fullName": "Buyer One",
+                "phone": "9876543210",
+                "email": "buyer@example.com",
+                "address": "Street 1",
+                "city": "Mumbai",
+                "state": "Maharashtra",
+                "pincode": "400001",
+            },
+            format="json",
+        )
+        self.assertEqual(place_response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(place_response.data["total_amount"], "2400.00")
+        self.assertEqual(len(place_response.data["items"]), 1)
+
+        product.refresh_from_db()
+        self.assertEqual(product.stock_quantity, 3)
+
+        my_orders_response = self.client.get(reverse("my_orders"))
+        self.assertEqual(my_orders_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(my_orders_response.data), 1)
+        self.assertEqual(my_orders_response.data[0]["items"][0]["productId"], product.id)
+        self.assertEqual(my_orders_response.data[0]["shippingFullName"], "Buyer One")
+        self.assertTrue(OrderShippingDetail.objects.filter(order_id=place_response.data["id"]).exists())
+
+        self.assertEqual(Order.objects.filter(customer=customer).count(), 1)
+
+    def test_customer_can_cancel_order_with_reason(self):
+        customer = User.objects.create_user(
+            email="cancelbuyer@example.com",
+            password="secret123",
+            role=User.ROLE_CUSTOMER,
+            name="Cancel Buyer",
+        )
+        order = Order.objects.create(
+            customer=customer,
+            status=Order.STATUS_PENDING,
+            subtotal_amount="100.00",
+            shipping_amount="0.00",
+            total_amount="100.00",
+            shipping_full_name="Cancel Buyer",
+            shipping_phone="9876543210",
+            shipping_email="cancelbuyer@example.com",
+            shipping_address="Addr",
+            shipping_city="City",
+            shipping_state="State",
+            shipping_pincode="400001",
+        )
+
+        self.client.force_authenticate(user=customer)
+        response = self.client.post(
+            reverse("cancel_order", kwargs={"order_id": order.id}),
+            {"reason": "Changed my mind"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["status"], "cancelled")
+        self.assertEqual(response.data["cancelReason"], "Changed my mind")

@@ -1,9 +1,11 @@
 import random
 import json
+from decimal import Decimal
 
 from django.conf import settings
 from django.contrib.auth import login
 from django.core.mail import send_mail
+from django.db import transaction
 from django.http import JsonResponse
 from django.utils import timezone
 from django.views.decorators.csrf import csrf_exempt
@@ -14,10 +16,16 @@ from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.views import TokenRefreshView
 import requests
 
-from .models import PendingRegistration, User, Vendor
+from .models import Order, OrderItem, OrderShippingDetail, PendingRegistration, Product, User, Vendor
 from .serializers import (
+    CancelOrderSerializer,
     LoginSerializer,
+    OrderSerializer,
+    PlaceOrderSerializer,
+    ProductSerializer,
+    ProductWriteSerializer,
     RequestRegistrationOTPSerializer,
+    StockUpdateSerializer,
     UserSerializer,
     VerifyRegistrationOTPSerializer,
 )
@@ -25,6 +33,16 @@ from .serializers import (
 OTP_TTL_MINUTES = 10
 OTP_RESEND_COOLDOWN_SECONDS = 60
 OTP_MAX_ATTEMPTS = 5
+
+
+class IsCustomer(permissions.BasePermission):
+    def has_permission(self, request, view):
+        return bool(request.user and request.user.is_authenticated and request.user.role == User.ROLE_CUSTOMER)
+
+
+class IsVendor(permissions.BasePermission):
+    def has_permission(self, request, view):
+        return bool(request.user and request.user.is_authenticated and request.user.role == User.ROLE_VENDOR)
 
 
 def token_payload_for_user(user):
@@ -264,6 +282,281 @@ class RefreshAPIView(TokenRefreshView):
     permission_classes = [permissions.AllowAny]
 
 
+class VendorProductListCreateAPIView(APIView):
+    permission_classes = [permissions.IsAuthenticated, IsVendor]
+
+    def get(self, request):
+        vendor = getattr(request.user, "vendor_profile", None)
+        if not vendor:
+            return Response({"detail": "Vendor profile not found"}, status=status.HTTP_400_BAD_REQUEST)
+
+        products = Product.objects.filter(vendor=vendor).order_by("-created_at")
+        return Response(ProductSerializer(products, many=True).data, status=status.HTTP_200_OK)
+
+    def post(self, request):
+        vendor = getattr(request.user, "vendor_profile", None)
+        if not vendor:
+            return Response({"detail": "Vendor profile not found"}, status=status.HTTP_400_BAD_REQUEST)
+
+        serializer = ProductWriteSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        product = serializer.save(vendor=vendor)
+        return Response(ProductSerializer(product).data, status=status.HTTP_201_CREATED)
+
+
+class VendorProductDetailAPIView(APIView):
+    permission_classes = [permissions.IsAuthenticated, IsVendor]
+
+    def _get_product(self, request, product_id):
+        vendor = getattr(request.user, "vendor_profile", None)
+        if not vendor:
+            return None
+        return Product.objects.filter(id=product_id, vendor=vendor).first()
+
+    def get(self, request, product_id):
+        product = self._get_product(request, product_id)
+        if not product:
+            return Response({"detail": "Product not found"}, status=status.HTTP_404_NOT_FOUND)
+        return Response(ProductSerializer(product).data, status=status.HTTP_200_OK)
+
+    def put(self, request, product_id):
+        product = self._get_product(request, product_id)
+        if not product:
+            return Response({"detail": "Product not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        serializer = ProductWriteSerializer(product, data=request.data)
+        serializer.is_valid(raise_exception=True)
+        product = serializer.save()
+        return Response(ProductSerializer(product).data, status=status.HTTP_200_OK)
+
+    def patch(self, request, product_id):
+        product = self._get_product(request, product_id)
+        if not product:
+            return Response({"detail": "Product not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        serializer = ProductWriteSerializer(product, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        product = serializer.save()
+        return Response(ProductSerializer(product).data, status=status.HTTP_200_OK)
+
+    def delete(self, request, product_id):
+        product = self._get_product(request, product_id)
+        if not product:
+            return Response({"detail": "Product not found"}, status=status.HTTP_404_NOT_FOUND)
+        product.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class VendorProductStockUpdateAPIView(APIView):
+    permission_classes = [permissions.IsAuthenticated, IsVendor]
+
+    def patch(self, request, product_id):
+        vendor = getattr(request.user, "vendor_profile", None)
+        if not vendor:
+            return Response({"detail": "Vendor profile not found"}, status=status.HTTP_400_BAD_REQUEST)
+
+        product = Product.objects.filter(id=product_id, vendor=vendor).first()
+        if not product:
+            return Response({"detail": "Product not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        serializer = StockUpdateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        product.stock_quantity = serializer.validated_data["stock_quantity"]
+        if product.reserved_quantity > product.stock_quantity:
+            product.reserved_quantity = product.stock_quantity
+        product.save(update_fields=["stock_quantity", "reserved_quantity", "updated_at"])
+        return Response(ProductSerializer(product).data, status=status.HTTP_200_OK)
+
+
+class PlaceOrderAPIView(APIView):
+    permission_classes = [permissions.IsAuthenticated, IsCustomer]
+
+    def _get_bridge_vendor(self):
+        bridge_user, _ = User.objects.get_or_create(
+            email="catalog-bridge@onlinedukan.local",
+            defaults={
+                "name": "Catalog Bridge Vendor",
+                "role": User.ROLE_VENDOR,
+                "is_active": True,
+            },
+        )
+        if bridge_user.role != User.ROLE_VENDOR:
+            bridge_user.role = User.ROLE_VENDOR
+            bridge_user.save(update_fields=["role"])
+
+        bridge_vendor, _ = Vendor.objects.get_or_create(
+            user=bridge_user,
+            defaults={
+                "business_name": "Catalog Bridge",
+                "login_email": "catalog-bridge-login@onlinedukan.local",
+            },
+        )
+        return bridge_vendor
+
+    def post(self, request):
+        serializer = PlaceOrderSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        validated = serializer.validated_data
+        items_data = validated["items"]
+
+        requested_by_product = {}
+        for item in items_data:
+            product_id = item["productId"]
+            requested_by_product[product_id] = requested_by_product.get(product_id, 0) + item["quantity"]
+
+        product_ids = list(requested_by_product.keys())
+        item_map = {item["productId"]: item for item in items_data}
+
+        with transaction.atomic():
+            products = (
+                Product.objects.select_for_update()
+                .select_related("vendor")
+                .filter(id__in=product_ids, is_active=True)
+            )
+            product_map = {product.id: product for product in products}
+
+            missing = [pid for pid in product_ids if pid not in product_map]
+            if missing:
+                bridge_vendor = self._get_bridge_vendor()
+                for missing_id in missing:
+                    item_payload = item_map.get(missing_id, {})
+                    fallback_title = str(item_payload.get("title", "")).strip() or f"Catalog Product {missing_id}"
+                    fallback_price = item_payload.get("price")
+                    if fallback_price is None:
+                        fallback_price = Decimal("999.00")
+
+                    fallback_product, _ = Product.objects.get_or_create(
+                        sku=f"legacy-{missing_id}",
+                        defaults={
+                            "vendor": bridge_vendor,
+                            "name": fallback_title[:200],
+                            "description": "Auto-bridged product from legacy frontend catalog.",
+                            "price": fallback_price,
+                            "stock_quantity": 100000,
+                            "reserved_quantity": 0,
+                            "is_active": True,
+                        },
+                    )
+                    if not fallback_product.is_active:
+                        fallback_product.is_active = True
+                        fallback_product.save(update_fields=["is_active", "updated_at"])
+                    product_map[missing_id] = fallback_product
+
+            subtotal = Decimal("0.00")
+            order_lines = []
+
+            for product_id, quantity in requested_by_product.items():
+                product = product_map[product_id]
+                if product.available_quantity < quantity:
+                    return Response(
+                        {
+                            "detail": f"Insufficient stock for product '{product.name}'.",
+                            "productId": product.id,
+                            "available": product.available_quantity,
+                        },
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+
+                line_total = product.price * quantity
+                subtotal += line_total
+                item_payload = item_map.get(product_id, {})
+                line_image = str(item_payload.get("image", "")).strip()
+                order_lines.append((product, quantity, product.price, line_total, line_image))
+
+            order = Order.objects.create(
+                customer=request.user,
+                status=Order.STATUS_PENDING,
+                subtotal_amount=subtotal,
+                shipping_amount=Decimal("0.00"),
+                total_amount=subtotal,
+                shipping_full_name=validated["fullName"],
+                shipping_phone=validated["phone"],
+                shipping_email=validated["email"],
+                shipping_address=validated["address"],
+                shipping_city=validated["city"],
+                shipping_state=validated["state"],
+                shipping_pincode=validated["pincode"],
+            )
+            OrderShippingDetail.objects.update_or_create(
+                order=order,
+                defaults={
+                    "full_name": validated["fullName"],
+                    "phone": validated["phone"],
+                    "email": validated["email"],
+                    "address": validated["address"],
+                    "city": validated["city"],
+                    "state": validated["state"],
+                    "pincode": validated["pincode"],
+                },
+            )
+
+            for product, quantity, unit_price, line_total, line_image in order_lines:
+                OrderItem.objects.create(
+                    order=order,
+                    product=product,
+                    vendor=product.vendor,
+                    quantity=quantity,
+                    unit_price=unit_price,
+                    line_total=line_total,
+                    product_name=product.name,
+                    product_image_url=line_image,
+                )
+                product.stock_quantity -= quantity
+                product.save(update_fields=["stock_quantity", "updated_at"])
+
+        order = Order.objects.select_related("shipping_detail").prefetch_related("items__product", "items__vendor").get(id=order.id)
+        return Response(OrderSerializer(order).data, status=status.HTTP_201_CREATED)
+
+
+class MyOrdersAPIView(APIView):
+    permission_classes = [permissions.IsAuthenticated, IsCustomer]
+
+    def get(self, request):
+        orders = (
+            Order.objects.filter(customer=request.user)
+            .select_related("shipping_detail")
+            .prefetch_related("items__product", "items__vendor")
+            .order_by("-placed_at")
+        )
+        return Response(OrderSerializer(orders, many=True).data, status=status.HTTP_200_OK)
+
+
+class MyOrderDetailAPIView(APIView):
+    permission_classes = [permissions.IsAuthenticated, IsCustomer]
+
+    def get(self, request, order_id):
+        order = (
+            Order.objects.filter(id=order_id, customer=request.user)
+            .select_related("shipping_detail")
+            .prefetch_related("items__product", "items__vendor")
+            .first()
+        )
+        if not order:
+            return Response({"detail": "Order not found"}, status=status.HTTP_404_NOT_FOUND)
+        return Response(OrderSerializer(order).data, status=status.HTTP_200_OK)
+
+
+class CancelOrderAPIView(APIView):
+    permission_classes = [permissions.IsAuthenticated, IsCustomer]
+
+    def post(self, request, order_id):
+        order = Order.objects.filter(id=order_id, customer=request.user).first()
+        if not order:
+            return Response({"detail": "Order not found"}, status=status.HTTP_404_NOT_FOUND)
+        if order.status in {Order.STATUS_DELIVERED, Order.STATUS_CANCELLED}:
+            return Response({"detail": "Order cannot be cancelled now."}, status=status.HTTP_400_BAD_REQUEST)
+
+        serializer = CancelOrderSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        order.status = Order.STATUS_CANCELLED
+        order.cancel_reason = serializer.validated_data["reason"].strip()
+        order.cancelled_at = timezone.now()
+        order.save(update_fields=["status", "cancel_reason", "cancelled_at", "updated_at"])
+
+        return Response(OrderSerializer(order).data, status=status.HTTP_200_OK)
+
+
 @csrf_exempt
 def google_auth(request):
     if request.method == "OPTIONS":
@@ -386,4 +679,13 @@ def google_auth(request):
         )
 
     login(request, user)
-    return JsonResponse({"ok": True, "email": user.email, "created": False}, status=200)
+    return JsonResponse(
+        {
+            "ok": True,
+            "email": user.email,
+            "created": False,
+            "user": UserSerializer(user).data,
+            "tokens": token_payload_for_user(user),
+        },
+        status=200,
+    )

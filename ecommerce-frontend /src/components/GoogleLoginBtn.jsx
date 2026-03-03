@@ -1,6 +1,9 @@
 import { useState } from "react";
 import { useGoogleLogin } from "@react-oauth/google";
 
+const ACCESS_TOKEN_KEY = "ec_access_token_v1";
+const REFRESH_TOKEN_KEY = "ec_refresh_token_v1";
+
 const API_BASE =
   import.meta.env.VITE_API_BASE ||
   import.meta.env.VITE_API_BASE_URL ||
@@ -32,6 +35,11 @@ export default function GoogleLoginBtn({ onSuccess, onError }) {
         const data = await resp.json();
         if (!resp.ok || !data?.ok) {
           throw new Error(data?.error || "Google login failed");
+        }
+
+        if (data?.tokens?.access && data?.tokens?.refresh) {
+          localStorage.setItem(ACCESS_TOKEN_KEY, data.tokens.access);
+          localStorage.setItem(REFRESH_TOKEN_KEY, data.tokens.refresh);
         }
 
         if (onSuccess) onSuccess(data);
