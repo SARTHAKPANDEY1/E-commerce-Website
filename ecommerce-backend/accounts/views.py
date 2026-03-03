@@ -10,12 +10,14 @@ from django.http import JsonResponse
 from django.utils import timezone
 from django.views.decorators.csrf import csrf_exempt
 from rest_framework import permissions, status
+from rest_framework_simplejwt.authentication import JWTAuthentication
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.views import TokenRefreshView
 import requests
 
+from .authentication import CsrfExemptSessionAuthentication
 from .models import Order, OrderItem, OrderShippingDetail, PendingRegistration, Product, User, Vendor
 from .serializers import (
     CancelOrderSerializer,
@@ -36,8 +38,16 @@ OTP_MAX_ATTEMPTS = 5
 
 
 class IsCustomer(permissions.BasePermission):
+    message = "Customer account required."
+
     def has_permission(self, request, view):
-        return bool(request.user and request.user.is_authenticated and request.user.role == User.ROLE_CUSTOMER)
+        if not request.user or not request.user.is_authenticated:
+            self.message = "Authentication required. Please login again."
+            return False
+        if request.user.role != User.ROLE_CUSTOMER:
+            self.message = f"Customer account required. Current role: {request.user.role}."
+            return False
+        return True
 
 
 class IsVendor(permissions.BasePermission):
@@ -369,6 +379,7 @@ class VendorProductStockUpdateAPIView(APIView):
 
 
 class PlaceOrderAPIView(APIView):
+    authentication_classes = [CsrfExemptSessionAuthentication, JWTAuthentication]
     permission_classes = [permissions.IsAuthenticated, IsCustomer]
 
     def _get_bridge_vendor(self):
@@ -509,6 +520,7 @@ class PlaceOrderAPIView(APIView):
 
 
 class MyOrdersAPIView(APIView):
+    authentication_classes = [CsrfExemptSessionAuthentication, JWTAuthentication]
     permission_classes = [permissions.IsAuthenticated, IsCustomer]
 
     def get(self, request):
@@ -522,6 +534,7 @@ class MyOrdersAPIView(APIView):
 
 
 class MyOrderDetailAPIView(APIView):
+    authentication_classes = [CsrfExemptSessionAuthentication, JWTAuthentication]
     permission_classes = [permissions.IsAuthenticated, IsCustomer]
 
     def get(self, request, order_id):
@@ -537,6 +550,7 @@ class MyOrderDetailAPIView(APIView):
 
 
 class CancelOrderAPIView(APIView):
+    authentication_classes = [CsrfExemptSessionAuthentication, JWTAuthentication]
     permission_classes = [permissions.IsAuthenticated, IsCustomer]
 
     def post(self, request, order_id):
