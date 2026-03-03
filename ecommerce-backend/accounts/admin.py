@@ -1,7 +1,7 @@
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
 
-from .models import PendingRegistration, User
+from .models import PendingRegistration, User, Vendor
 
 
 @admin.register(User)
@@ -33,3 +33,9 @@ class PendingRegistrationAdmin(admin.ModelAdmin):
     list_display = ("email", "name", "role", "otp_expires_at", "otp_attempt_count", "otp_last_sent_at", "updated_at")
     search_fields = ("email", "name")
     readonly_fields = ("created_at", "updated_at")
+
+
+@admin.register(Vendor)
+class VendorAdmin(admin.ModelAdmin):
+    list_display = ("id", "business_name", "user", "created_at")
+    search_fields = ("business_name", "user__email", "user__name")

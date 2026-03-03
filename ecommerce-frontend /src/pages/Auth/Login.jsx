@@ -1,30 +1,23 @@
 import { Link, useNavigate } from "react-router-dom";
 import { useForm } from "react-hook-form";
-import { useEffect, useMemo, useState } from "react";
+import { useState } from "react";
 import { Building2, CheckCircle2, ShieldCheck, Store, Truck, Wallet } from "lucide-react";
 import useAuthStore from "../../store/auth.store";
 import { loginUser } from "../../services/api/auth.api";
+import GoogleLoginBtn from "../../components/GoogleLoginBtn";
 
-const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID || "";
+const GOOGLE_CLIENT_ID =
+  import.meta.env.VITE_GOOGLE_CLIENT_ID ||
+  import.meta.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID ||
+  "";
 
 export default function Login() {
   const navigate = useNavigate();
   const login = useAuthStore((s) => s.login);
   const [selectedRole, setSelectedRole] = useState("customer");
-  const [showGooglePicker, setShowGooglePicker] = useState(false);
-  const [manualGoogleEmail, setManualGoogleEmail] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [backendError, setBackendError] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
-
-  const rememberedGoogleAccounts = useMemo(
-    () => [
-      "alex@gmail.com",
-      "shopper.user@gmail.com",
-      "business.owner@gmail.com",
-    ],
-    []
-  );
 
   const {
     register,
@@ -33,18 +26,6 @@ export default function Login() {
   } = useForm({
     defaultValues: { email: "", password: "", organizationName: "" },
   });
-
-  useEffect(() => {
-    if (!GOOGLE_CLIENT_ID) return;
-    if (document.getElementById("google-identity-sdk")) return;
-
-    const script = document.createElement("script");
-    script.id = "google-identity-sdk";
-    script.src = "https://accounts.google.com/gsi/client";
-    script.async = true;
-    script.defer = true;
-    document.body.appendChild(script);
-  }, []);
 
   async function onSubmit(values) {
     setBackendError("");
@@ -73,51 +54,33 @@ export default function Login() {
     }
   }
 
-  async function loginWithGoogleEmail(email) {
-    if (!email) return;
-    setBackendError("Google login is not connected to backend password auth yet. Please login with registered email and password.");
-  }
-
-  async function handleGoogleLogin() {
-    const googleApi = window.google?.accounts?.oauth2;
-
-    if (!GOOGLE_CLIENT_ID || !googleApi) {
-      setShowGooglePicker(true);
+  function handleGoogleSuccess(data) {
+    const email = String(data?.email || "").trim().toLowerCase();
+    if (!email) {
+      setBackendError("Google login succeeded but no email was returned.");
       return;
     }
 
-    try {
-      const tokenClient = googleApi.initTokenClient({
-        client_id: GOOGLE_CLIENT_ID,
-        scope: "openid email profile",
-        callback: async (tokenResponse) => {
-          if (!tokenResponse?.access_token) {
-            setShowGooglePicker(true);
-            return;
-          }
+    login(
+      {
+        id: email,
+        name: email.split("@")[0],
+        email,
+        organizationName: null,
+      },
+      "customer"
+    );
 
-          try {
-            const userInfoResponse = await fetch("https://www.googleapis.com/oauth2/v3/userinfo", {
-              headers: {
-                Authorization: `Bearer ${tokenResponse.access_token}`,
-              },
-            });
-            const userInfo = await userInfoResponse.json();
-            if (userInfo?.email) {
-              loginWithGoogleEmail(userInfo.email);
-            } else {
-              setShowGooglePicker(true);
-            }
-          } catch {
-            setShowGooglePicker(true);
-          }
-        },
-      });
+    navigate("/");
+  }
 
-      tokenClient.requestAccessToken({ prompt: "select_account" });
-    } catch {
-      setShowGooglePicker(true);
+  function handleGoogleError(error) {
+    const message = error?.message || "Google login failed";
+    if (message === "user_not_registered") {
+      navigate("/register");
+      return;
     }
+    setBackendError(message);
   }
 
   return (
@@ -165,14 +128,17 @@ export default function Login() {
             <p className="mt-1 text-sm text-slate-700">Use your registered credentials to continue.</p>
 
             <div className="mt-6 space-y-4">
-              <button
-                type="button"
-                onClick={handleGoogleLogin}
-                className="w-full rounded-2xl border border-slate-300/80 bg-white px-3 py-3 text-sm font-black text-slate-900 transition hover:bg-slate-50 inline-flex items-center justify-center gap-2"
-              >
-                <GoogleLogo />
-                Continue with Google
-              </button>
+              {GOOGLE_CLIENT_ID ? (
+                <GoogleLoginBtn onSuccess={handleGoogleSuccess} onError={handleGoogleError} />
+              ) : (
+                <button
+                  type="button"
+                  disabled
+                  className="w-full rounded-2xl border border-slate-300/80 bg-white px-3 py-3 text-sm font-black text-slate-500"
+                >
+                  Continue with Google (configure VITE_GOOGLE_CLIENT_ID)
+                </button>
+              )}
 
               <div className="relative py-1">
                 <div className="h-px bg-slate-200" />
@@ -281,89 +247,7 @@ export default function Login() {
           </form>
         </div>
       </div>
-
-      {showGooglePicker ? (
-        <GooglePickerModal
-          title="Choose a Google account"
-          accounts={rememberedGoogleAccounts}
-          manualEmail={manualGoogleEmail}
-          onManualEmailChange={setManualGoogleEmail}
-          onSelect={(email) => {
-            setShowGooglePicker(false);
-            loginWithGoogleEmail(email);
-          }}
-          onClose={() => setShowGooglePicker(false)}
-        />
-      ) : null}
     </div>
-  );
-}
-
-function GooglePickerModal({ title, accounts, manualEmail, onManualEmailChange, onSelect, onClose }) {
-  return (
-    <div className="fixed inset-0 z-[100] bg-slate-950/45 backdrop-blur-sm p-4 grid place-items-center">
-      <div className="w-full max-w-md rounded-2xl border border-slate-200 bg-white shadow-2xl p-5">
-        <div className="inline-flex items-center gap-2 text-sm font-black text-slate-900">
-          <GoogleLogo />
-          {title}
-        </div>
-
-        <div className="mt-4 space-y-2">
-          {accounts.map((email) => (
-            <button
-              key={email}
-              type="button"
-              onClick={() => onSelect(email)}
-              className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-left text-sm font-bold text-slate-900 hover:bg-slate-50"
-            >
-              {email}
-            </button>
-          ))}
-        </div>
-
-        <div className="mt-4">
-          <label className="text-xs font-black text-slate-700">Use another account</label>
-          <input
-            value={manualEmail}
-            onChange={(e) => onManualEmailChange(e.target.value)}
-            placeholder="Enter Gmail manually"
-            className="mt-2 w-full rounded-xl border border-slate-300/70 bg-white px-3 py-2.5 text-sm font-bold outline-none focus:ring-2 focus:ring-blue-200"
-          />
-        </div>
-
-        <div className="mt-4 flex gap-2">
-          <button
-            type="button"
-            onClick={() => onSelect(manualEmail)}
-            disabled={!manualEmail}
-            className={
-              "flex-1 rounded-xl px-3 py-2.5 text-sm font-black " +
-              (manualEmail ? "bg-slate-900 text-white" : "bg-slate-300 text-slate-600 cursor-not-allowed")
-            }
-          >
-            Continue
-          </button>
-          <button
-            type="button"
-            onClick={onClose}
-            className="rounded-xl border border-slate-300/70 bg-white px-3 py-2.5 text-sm font-black text-slate-900"
-          >
-            Cancel
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function GoogleLogo() {
-  return (
-    <svg width="18" height="18" viewBox="0 0 48 48" aria-hidden="true">
-      <path fill="#FFC107" d="M43.6 20.5H42V20H24v8h11.3C33.7 32.7 29.3 36 24 36c-6.6 0-12-5.4-12-12s5.4-12 12-12c3 0 5.7 1.1 7.8 2.9l5.7-5.7C34 6.1 29.3 4 24 4 12.9 4 4 12.9 4 24s8.9 20 20 20 20-8.9 20-20c0-1.3-.1-2.3-.4-3.5z"/>
-      <path fill="#FF3D00" d="M6.3 14.7l6.6 4.8C14.7 15.3 19 12 24 12c3 0 5.7 1.1 7.8 2.9l5.7-5.7C34 6.1 29.3 4 24 4c-7.7 0-14.3 4.4-17.7 10.7z"/>
-      <path fill="#4CAF50" d="M24 44c5.2 0 9.9-2 13.4-5.2l-6.2-5.2C29.1 35.1 26.7 36 24 36c-5.3 0-9.8-3.3-11.5-8l-6.6 5.1C9.2 39.5 16 44 24 44z"/>
-      <path fill="#1976D2" d="M43.6 20.5H42V20H24v8h11.3c-.8 2.3-2.2 4.2-4.1 5.6l6.2 5.2C36.9 39.2 44 34 44 24c0-1.3-.1-2.3-.4-3.5z"/>
-    </svg>
   );
 }
 

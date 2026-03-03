@@ -7,6 +7,7 @@ from .views import (
     RequestRegistrationOTPAPIView,
     ResendRegistrationOTPAPIView,
     VerifyRegistrationOTPAPIView,
+    google_auth,
 )
 
 urlpatterns = [
@@ -14,6 +15,8 @@ urlpatterns = [
     path("register/verify-otp/", VerifyRegistrationOTPAPIView.as_view(), name="register_verify_otp"),
     path("register/resend-otp/", ResendRegistrationOTPAPIView.as_view(), name="register_resend_otp"),
     path("login/", LoginAPIView.as_view(), name="login"),
+    path("google/", google_auth, name="google_auth"),
+    path("google", google_auth, name="google_auth_no_slash"),
     path("refresh/", RefreshAPIView.as_view(), name="token_refresh"),
     path("me/", MeAPIView.as_view(), name="me"),
 ]

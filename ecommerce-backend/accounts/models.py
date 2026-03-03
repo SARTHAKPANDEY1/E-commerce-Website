@@ -60,8 +60,26 @@ class User(AbstractBaseUser, PermissionsMixin):
         return self.email
 
 
+class Vendor(models.Model):
+    user = models.OneToOneField(
+        User,
+        on_delete=models.CASCADE,
+        related_name="vendor_profile",
+    )
+    business_name = models.CharField(max_length=160)
+    login_email = models.EmailField(unique=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"{self.business_name} ({self.user.email})"
+
+
 class PendingRegistration(models.Model):
-    email = models.EmailField(unique=True)
+    email = models.EmailField()
     name = models.CharField(max_length=120)
     role = models.CharField(max_length=20, choices=User.ROLE_CHOICES, default=User.ROLE_CUSTOMER)
     organization_name = models.CharField(max_length=160, blank=True, null=True)
@@ -78,6 +96,12 @@ class PendingRegistration(models.Model):
 
     class Meta:
         ordering = ["-updated_at"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["email", "role"],
+                name="unique_pending_email_per_role",
+            )
+        ]
 
     def __str__(self):
         return self.email

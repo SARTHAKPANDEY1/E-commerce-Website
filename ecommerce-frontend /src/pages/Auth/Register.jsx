@@ -1,13 +1,19 @@
 import { Link, useNavigate } from "react-router-dom";
 import { useForm } from "react-hook-form";
 import { useState } from "react";
-import { CheckCircle2, CreditCard, MailCheck, Package, Shield } from "lucide-react";
+import { Building2, CheckCircle2, CreditCard, MailCheck, Package, Shield, Store } from "lucide-react";
 import useAuthStore from "../../store/auth.store";
+import GoogleLoginBtn from "../../components/GoogleLoginBtn";
 import {
   requestRegistrationOtp,
   resendRegistrationOtp,
   verifyRegistrationOtp,
 } from "../../services/api/auth.api";
+
+const GOOGLE_CLIENT_ID =
+  import.meta.env.VITE_GOOGLE_CLIENT_ID ||
+  import.meta.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID ||
+  "";
 
 export default function Register() {
   const navigate = useNavigate();
@@ -17,6 +23,7 @@ export default function Register() {
   const [backendSuccess, setBackendSuccess] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
+  const [selectedRole, setSelectedRole] = useState("customer");
 
   const [otpStep, setOtpStep] = useState(false);
   const [otp, setOtp] = useState("");
@@ -28,7 +35,7 @@ export default function Register() {
     handleSubmit,
     formState: { errors },
   } = useForm({
-    defaultValues: { name: "", email: "", password: "" },
+    defaultValues: { name: "", email: "", password: "", organizationName: "" },
   });
 
   async function onRequestOtp(values) {
@@ -40,7 +47,11 @@ export default function Register() {
       name: String(values.name || "").trim(),
       email: String(values.email || "").trim().toLowerCase(),
       password: values.password,
-      role: "customer",
+      role: selectedRole,
+      organizationName:
+        selectedRole === "vendor"
+          ? String(values.organizationName || "").trim()
+          : null,
     };
 
     try {
@@ -65,6 +76,7 @@ export default function Register() {
       const response = await verifyRegistrationOtp({
         email: pendingEmail,
         otp: String(otp || "").trim(),
+        role: pendingPayload?.role || selectedRole,
       });
       const user = response.user;
 
@@ -92,7 +104,10 @@ export default function Register() {
     setIsSubmitting(true);
 
     try {
-      const res = await resendRegistrationOtp({ email: pendingEmail });
+      const res = await resendRegistrationOtp({
+        email: pendingEmail,
+        role: pendingPayload?.role || selectedRole,
+      });
       setBackendSuccess(res.detail || "OTP resent to your email address.");
     } catch (error) {
       setBackendError(error.message);
@@ -117,6 +132,30 @@ export default function Register() {
     }
   }
 
+  function handleGoogleSuccess(data) {
+    const email = String(data?.email || "").trim().toLowerCase();
+    if (!email) {
+      setBackendError("Google login succeeded but no email was returned.");
+      return;
+    }
+
+    login(
+      {
+        id: email,
+        name: email.split("@")[0],
+        email,
+        organizationName: null,
+      },
+      "customer"
+    );
+
+    navigate("/");
+  }
+
+  function handleGoogleError(error) {
+    setBackendError(error?.message || "Google login failed");
+  }
+
   return (
     <div className="ec-container">
       <div className="py-8">
@@ -132,6 +171,57 @@ export default function Register() {
 
             {!otpStep ? (
               <form onSubmit={handleSubmit(onRequestOtp)} className="mt-6 space-y-4">
+                {GOOGLE_CLIENT_ID ? (
+                  <GoogleLoginBtn onSuccess={handleGoogleSuccess} onError={handleGoogleError} />
+                ) : (
+                  <button
+                    type="button"
+                    disabled
+                    className="w-full rounded-2xl border border-slate-300/80 bg-white px-3 py-3 text-sm font-black text-slate-500"
+                  >
+                    Continue with Google (configure VITE_GOOGLE_CLIENT_ID)
+                  </button>
+                )}
+
+                <div className="relative py-1">
+                  <div className="h-px bg-slate-200" />
+                  <span className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 bg-white px-2 text-[11px] font-black uppercase tracking-wide text-slate-500">
+                    or
+                  </span>
+                </div>
+
+                <div>
+                  <label className="text-xs font-black text-slate-800">Register As</label>
+                  <div className="mt-2 grid grid-cols-2 rounded-2xl border border-slate-200 bg-white/70 p-1">
+                    <button
+                      type="button"
+                      onClick={() => setSelectedRole("customer")}
+                      className={
+                        "inline-flex items-center justify-center gap-2 rounded-xl px-3 py-2.5 text-sm font-black transition " +
+                        (selectedRole === "customer"
+                          ? "bg-slate-900 text-white shadow-sm"
+                          : "text-slate-700 hover:bg-slate-100/70")
+                      }
+                    >
+                      <Store size={16} />
+                      Customer
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setSelectedRole("vendor")}
+                      className={
+                        "inline-flex items-center justify-center gap-2 rounded-xl px-3 py-2.5 text-sm font-black transition " +
+                        (selectedRole === "vendor"
+                          ? "bg-slate-900 text-white shadow-sm"
+                          : "text-slate-700 hover:bg-slate-100/70")
+                      }
+                    >
+                      <Building2 size={16} />
+                      Vendor
+                    </button>
+                  </div>
+                </div>
+
                 <Field label="Full Name" error={errors.name?.message}>
                   <input
                     {...register("name", { required: "Name is required" })}
@@ -139,6 +229,21 @@ export default function Register() {
                     className="w-full rounded-2xl border border-slate-300/70 bg-slate-900/5 px-3 py-3 text-sm font-extrabold outline-none focus:ring-2 focus:ring-blue-200 placeholder:text-slate-600"
                   />
                 </Field>
+
+                {selectedRole === "vendor" ? (
+                  <Field label="Organization Name" error={errors.organizationName?.message}>
+                    <input
+                      {...register("organizationName", {
+                        validate: (value) =>
+                          selectedRole !== "vendor" ||
+                          String(value || "").trim().length > 1 ||
+                          "Organization name is required for vendor registration",
+                      })}
+                      placeholder="Enter your organization name"
+                      className="w-full rounded-2xl border border-slate-300/70 bg-slate-900/5 px-3 py-3 text-sm font-extrabold outline-none focus:ring-2 focus:ring-blue-200 placeholder:text-slate-600"
+                    />
+                  </Field>
+                ) : null}
 
                 <Field label="Email" error={errors.email?.message}>
                   <input
