@@ -356,6 +356,9 @@ class AuthFlowTests(APITestCase):
         self.assertEqual(place_response.status_code, status.HTTP_201_CREATED)
         self.assertEqual(place_response.data["total_amount"], "2400.00")
         self.assertEqual(len(place_response.data["items"]), 1)
+        self.assertGreaterEqual(len(mail.outbox), 1)
+        self.assertTrue(mail.outbox[-1].attachments)
+        self.assertTrue(str(mail.outbox[-1].attachments[0][0]).endswith(".pdf"))
 
         product.refresh_from_db()
         self.assertEqual(product.stock_quantity, 3)
@@ -401,3 +404,255 @@ class AuthFlowTests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.data["status"], "cancelled")
         self.assertEqual(response.data["cancelReason"], "Changed my mind")
+
+    def test_cancel_order_restores_stock(self):
+        customer = User.objects.create_user(
+            email="restock-buyer@example.com",
+            password="secret123",
+            role=User.ROLE_CUSTOMER,
+            name="Restock Buyer",
+        )
+        vendor_user = User.objects.create_user(
+            email="restock-vendor-auth@example.com",
+            password="secret123",
+            role=User.ROLE_VENDOR,
+            name="Restock Vendor",
+        )
+        vendor_profile = Vendor.objects.create(
+            user=vendor_user,
+            business_name="Restock Store",
+            login_email="restock-vendor@example.com",
+        )
+        product = Product.objects.create(
+            vendor=vendor_profile,
+            name="Shoes",
+            description="Running shoes",
+            price="1000.00",
+            sku="RESTOCK-1",
+            stock_quantity=10,
+            reserved_quantity=0,
+            is_active=True,
+        )
+
+        self.client.force_authenticate(user=customer)
+        place_response = self.client.post(
+            reverse("place_order"),
+            {
+                "items": [{"productId": product.id, "quantity": 2, "title": "Shoes", "price": "1000.00"}],
+                "fullName": "Restock Buyer",
+                "phone": "9999999999",
+                "email": "restock-buyer@example.com",
+                "address": "Address 1",
+                "city": "Bhopal",
+                "state": "MP",
+                "pincode": "462001",
+            },
+            format="json",
+        )
+        self.assertEqual(place_response.status_code, status.HTTP_201_CREATED)
+        product.refresh_from_db()
+        self.assertEqual(product.stock_quantity, 8)
+
+        cancel_response = self.client.post(
+            reverse("cancel_order", kwargs={"order_id": place_response.data["id"]}),
+            {"reason": "Need to change address"},
+            format="json",
+        )
+        self.assertEqual(cancel_response.status_code, status.HTTP_200_OK)
+        product.refresh_from_db()
+        self.assertEqual(product.stock_quantity, 10)
+
+    def test_vendor_order_list_and_status_actions(self):
+        customer = User.objects.create_user(
+            email="vendorflow-buyer@example.com",
+            password="secret123",
+            role=User.ROLE_CUSTOMER,
+            name="Vendor Flow Buyer",
+        )
+        vendor_user = User.objects.create_user(
+            email="vendorflow-auth@example.com",
+            password="secret123",
+            role=User.ROLE_VENDOR,
+            name="Vendor Flow Seller",
+        )
+        vendor_profile = Vendor.objects.create(
+            user=vendor_user,
+            business_name="Vendor Flow Store",
+            login_email="vendorflow@example.com",
+        )
+        product = Product.objects.create(
+            vendor=vendor_profile,
+            name="Watch",
+            description="Smart watch",
+            price="2500.00",
+            sku="WATCH-1",
+            stock_quantity=6,
+            reserved_quantity=0,
+            is_active=True,
+        )
+
+        self.client.force_authenticate(user=customer)
+        place_response = self.client.post(
+            reverse("place_order"),
+            {
+                "items": [{"productId": product.id, "quantity": 1, "title": "Watch", "price": "2500.00"}],
+                "fullName": "Vendor Flow Buyer",
+                "phone": "9999999999",
+                "email": "vendorflow-buyer@example.com",
+                "address": "Address 2",
+                "city": "Bhopal",
+                "state": "MP",
+                "pincode": "462001",
+            },
+            format="json",
+        )
+        self.assertEqual(place_response.status_code, status.HTTP_201_CREATED)
+        item_id = place_response.data["items"][0]["id"]
+
+        self.client.force_authenticate(user=vendor_user)
+        list_response = self.client.get(reverse("vendor_orders"))
+        self.assertEqual(list_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(list_response.data), 1)
+        self.assertEqual(list_response.data[0]["vendorStatus"], "pending")
+
+        accept_response = self.client.patch(
+            reverse("vendor_order_item_status", kwargs={"item_id": item_id}),
+            {"status": "accepted"},
+            format="json",
+        )
+        self.assertEqual(accept_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(accept_response.data["vendorStatus"], "accepted")
+        self.assertEqual(accept_response.data["orderStatus"], "confirmed")
+
+        filtered_response = self.client.get(f"{reverse('vendor_orders')}?vendorStatus=accepted")
+        self.assertEqual(filtered_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(filtered_response.data), 1)
+
+        summary_response = self.client.get(reverse("vendor_orders_summary"))
+        self.assertEqual(summary_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(summary_response.data["acceptedItems"], 1)
+
+        ship_response = self.client.patch(
+            reverse("vendor_order_item_status", kwargs={"item_id": item_id}),
+            {"status": "shipped"},
+            format="json",
+        )
+        self.assertEqual(ship_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(ship_response.data["vendorStatus"], "shipped")
+        self.assertEqual(ship_response.data["orderStatus"], "shipped")
+
+    def test_vendor_reject_restores_stock(self):
+        customer = User.objects.create_user(
+            email="vendorreject-buyer@example.com",
+            password="secret123",
+            role=User.ROLE_CUSTOMER,
+            name="Vendor Reject Buyer",
+        )
+        vendor_user = User.objects.create_user(
+            email="vendorreject-auth@example.com",
+            password="secret123",
+            role=User.ROLE_VENDOR,
+            name="Vendor Reject Seller",
+        )
+        vendor_profile = Vendor.objects.create(
+            user=vendor_user,
+            business_name="Vendor Reject Store",
+            login_email="vendorreject@example.com",
+        )
+        product = Product.objects.create(
+            vendor=vendor_profile,
+            name="Bag",
+            description="Travel bag",
+            price="1500.00",
+            sku="BAG-RESTORE-1",
+            stock_quantity=4,
+            reserved_quantity=0,
+            is_active=True,
+        )
+
+        self.client.force_authenticate(user=customer)
+        place_response = self.client.post(
+            reverse("place_order"),
+            {
+                "items": [{"productId": product.id, "quantity": 2, "title": "Bag", "price": "1500.00"}],
+                "fullName": "Vendor Reject Buyer",
+                "phone": "9999999999",
+                "email": "vendorreject-buyer@example.com",
+                "address": "Address 3",
+                "city": "Bhopal",
+                "state": "MP",
+                "pincode": "462001",
+            },
+            format="json",
+        )
+        self.assertEqual(place_response.status_code, status.HTTP_201_CREATED)
+        item_id = place_response.data["items"][0]["id"]
+        product.refresh_from_db()
+        self.assertEqual(product.stock_quantity, 2)
+
+        self.client.force_authenticate(user=vendor_user)
+        reject_response = self.client.patch(
+            reverse("vendor_order_item_status", kwargs={"item_id": item_id}),
+            {"status": "rejected", "reason": "Out of stock at warehouse"},
+            format="json",
+        )
+        self.assertEqual(reject_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(reject_response.data["vendorStatus"], "rejected")
+        self.assertEqual(reject_response.data["stockRestored"], True)
+        self.assertEqual(reject_response.data["orderStatus"], "cancelled")
+        product.refresh_from_db()
+        self.assertEqual(product.stock_quantity, 4)
+
+    def test_invalid_vendor_status_transition_is_blocked(self):
+        customer = User.objects.create_user(
+            email="vendorinvalid-buyer@example.com",
+            password="secret123",
+            role=User.ROLE_CUSTOMER,
+            name="Vendor Invalid Buyer",
+        )
+        vendor_user = User.objects.create_user(
+            email="vendorinvalid-auth@example.com",
+            password="secret123",
+            role=User.ROLE_VENDOR,
+            name="Vendor Invalid Seller",
+        )
+        vendor_profile = Vendor.objects.create(
+            user=vendor_user,
+            business_name="Vendor Invalid Store",
+            login_email="vendorinvalid@example.com",
+        )
+        product = Product.objects.create(
+            vendor=vendor_profile,
+            name="Bottle",
+            description="Steel bottle",
+            price="500.00",
+            sku="BOTTLE-1",
+            stock_quantity=10,
+            reserved_quantity=0,
+            is_active=True,
+        )
+
+        self.client.force_authenticate(user=customer)
+        place_response = self.client.post(
+            reverse("place_order"),
+            {
+                "items": [{"productId": product.id, "quantity": 1, "title": "Bottle", "price": "500.00"}],
+                "fullName": "Vendor Invalid Buyer",
+                "phone": "9999999999",
+                "email": "vendorinvalid-buyer@example.com",
+                "address": "Address 4",
+                "city": "Bhopal",
+                "state": "MP",
+                "pincode": "462001",
+            },
+            format="json",
+        )
+        item_id = place_response.data["items"][0]["id"]
+
+        self.client.force_authenticate(user=vendor_user)
+        invalid_transition = self.client.patch(
+            reverse("vendor_order_item_status", kwargs={"item_id": item_id}),
+            {"status": "shipped"},
+            format="json",
+        )
+        self.assertEqual(invalid_transition.status_code, status.HTTP_400_BAD_REQUEST)

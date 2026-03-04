@@ -1,10 +1,11 @@
 import random
 import json
 from decimal import Decimal
+from datetime import datetime
 
 from django.conf import settings
 from django.contrib.auth import login
-from django.core.mail import send_mail
+from django.core.mail import EmailMessage, send_mail
 from django.db import transaction
 from django.http import JsonResponse
 from django.utils import timezone
@@ -29,6 +30,8 @@ from .serializers import (
     RequestRegistrationOTPSerializer,
     StockUpdateSerializer,
     UserSerializer,
+    VendorOrderItemSerializer,
+    VendorOrderItemStatusUpdateSerializer,
     VerifyRegistrationOTPSerializer,
 )
 
@@ -53,6 +56,161 @@ class IsCustomer(permissions.BasePermission):
 class IsVendor(permissions.BasePermission):
     def has_permission(self, request, view):
         return bool(request.user and request.user.is_authenticated and request.user.role == User.ROLE_VENDOR)
+
+
+def sync_order_status_from_items(order):
+    if order.status == Order.STATUS_CANCELLED:
+        return
+
+    item_statuses = list(order.items.values_list("vendor_status", flat=True))
+    if not item_statuses:
+        return
+
+    new_status = order.status
+    if all(status == OrderItem.VENDOR_STATUS_SHIPPED for status in item_statuses):
+        new_status = Order.STATUS_SHIPPED
+    elif all(status == OrderItem.VENDOR_STATUS_REJECTED for status in item_statuses):
+        new_status = Order.STATUS_CANCELLED
+    elif any(status in {OrderItem.VENDOR_STATUS_ACCEPTED, OrderItem.VENDOR_STATUS_SHIPPED} for status in item_statuses):
+        new_status = Order.STATUS_CONFIRMED
+    else:
+        new_status = Order.STATUS_PENDING
+
+    if new_status != order.status:
+        order.status = new_status
+        fields = ["status", "updated_at"]
+        if new_status == Order.STATUS_CANCELLED and not order.cancelled_at:
+            order.cancelled_at = timezone.now()
+            if not order.cancel_reason:
+                order.cancel_reason = "All items were rejected by vendor."
+            fields.extend(["cancelled_at", "cancel_reason"])
+        order.save(update_fields=fields)
+
+
+def _pdf_escape(text):
+    return str(text).replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
+
+
+def build_simple_invoice_pdf(order):
+    shipping = getattr(order, "shipping_detail", None)
+    line_items = list(order.items.select_related("product", "vendor").all())
+
+    lines = [
+        "OnlineDukan Invoice",
+        f"Invoice Date: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC",
+        f"Order ID: {order.id}",
+        "",
+        "Customer Details:",
+        f"Name: {getattr(shipping, 'full_name', '') or order.shipping_full_name}",
+        f"Email: {getattr(shipping, 'email', '') or order.shipping_email}",
+        f"Phone: {getattr(shipping, 'phone', '') or order.shipping_phone}",
+        "",
+        "Shipping Address:",
+        f"{getattr(shipping, 'address', '') or order.shipping_address}",
+        f"{getattr(shipping, 'city', '') or order.shipping_city}, {getattr(shipping, 'state', '') or order.shipping_state} - {getattr(shipping, 'pincode', '') or order.shipping_pincode}",
+        "",
+        "Items:",
+    ]
+
+    for idx, item in enumerate(line_items, start=1):
+        lines.append(
+            f"{idx}. {item.product_name or item.product.name} | Qty: {item.quantity} | Unit: {item.unit_price} | Total: {item.line_total}"
+        )
+
+    lines.extend(
+        [
+            "",
+            f"Subtotal: {order.subtotal_amount}",
+            f"Shipping: {order.shipping_amount}",
+            f"Grand Total: {order.total_amount}",
+            "",
+            "Thank you for shopping with OnlineDukan.",
+        ]
+    )
+
+    # Minimal single-page PDF with plain text.
+    content_lines = []
+    y = 790
+    for line in lines[:52]:
+        content_lines.append(f"BT /F1 11 Tf 40 {y} Td ({_pdf_escape(line)}) Tj ET")
+        y -= 14
+    content_stream = "\n".join(content_lines).encode("latin-1", errors="replace")
+
+    objects = []
+    objects.append(b"1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n")
+    objects.append(b"2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n")
+    objects.append(
+        b"3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >> endobj\n"
+    )
+    objects.append(b"4 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> endobj\n")
+    objects.append(
+        f"5 0 obj << /Length {len(content_stream)} >> stream\n".encode("latin-1")
+        + content_stream
+        + b"\nendstream endobj\n"
+    )
+
+    out = bytearray(b"%PDF-1.4\n")
+    offsets = [0]
+    for obj in objects:
+        offsets.append(len(out))
+        out.extend(obj)
+
+    xref_pos = len(out)
+    out.extend(f"xref\n0 {len(offsets)}\n".encode("latin-1"))
+    out.extend(b"0000000000 65535 f \n")
+    for off in offsets[1:]:
+        out.extend(f"{off:010d} 00000 n \n".encode("latin-1"))
+    out.extend(
+        f"trailer << /Size {len(offsets)} /Root 1 0 R >>\nstartxref\n{xref_pos}\n%%EOF\n".encode(
+            "latin-1"
+        )
+    )
+    return bytes(out)
+
+
+def send_order_invoice_email(order_id):
+    try:
+        order = (
+            Order.objects.filter(id=order_id)
+            .select_related("customer", "shipping_detail")
+            .prefetch_related("items__product", "items__vendor")
+            .first()
+        )
+        if not order:
+            return
+
+        shipping = getattr(order, "shipping_detail", None)
+        recipient = (
+            getattr(shipping, "email", None)
+            or order.shipping_email
+            or order.customer.email
+        )
+        if not recipient:
+            return
+
+        subject = f"Your OnlineDukan Order Invoice #{order.id}"
+        body = (
+            f"Hi {getattr(shipping, 'full_name', '') or order.customer.name},\n\n"
+            f"Thank you for your order #{order.id}.\n"
+            "Please find your invoice attached as PDF.\n\n"
+            "Regards,\nOnlineDukan Team"
+        )
+        invoice_pdf = build_simple_invoice_pdf(order)
+
+        email = EmailMessage(
+            subject=subject,
+            body=body,
+            from_email=settings.DEFAULT_FROM_EMAIL or settings.EMAIL_HOST_USER or "no-reply@onlinedukan.local",
+            to=[recipient],
+        )
+        email.attach(
+            filename=f"invoice_order_{order.id}.pdf",
+            content=invoice_pdf,
+            mimetype="application/pdf",
+        )
+        email.send(fail_silently=True)
+    except Exception as exc:
+        print("ORDER INVOICE EMAIL FAILED:", str(exc))
 
 
 def token_payload_for_user(user):
@@ -515,6 +673,7 @@ class PlaceOrderAPIView(APIView):
                 product.stock_quantity -= quantity
                 product.save(update_fields=["stock_quantity", "updated_at"])
 
+        send_order_invoice_email(order.id)
         order = Order.objects.select_related("shipping_detail").prefetch_related("items__product", "items__vendor").get(id=order.id)
         return Response(OrderSerializer(order).data, status=status.HTTP_201_CREATED)
 
@@ -563,12 +722,160 @@ class CancelOrderAPIView(APIView):
         serializer = CancelOrderSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
-        order.status = Order.STATUS_CANCELLED
-        order.cancel_reason = serializer.validated_data["reason"].strip()
-        order.cancelled_at = timezone.now()
-        order.save(update_fields=["status", "cancel_reason", "cancelled_at", "updated_at"])
+        with transaction.atomic():
+            order_items = (
+                OrderItem.objects.select_for_update()
+                .select_related("product")
+                .filter(order=order)
+            )
+            for item in order_items:
+                if not item.stock_restored:
+                    item.product.stock_quantity += item.quantity
+                    item.product.save(update_fields=["stock_quantity", "updated_at"])
+                    item.stock_restored = True
+                    item.save(update_fields=["stock_restored"])
+
+            order.status = Order.STATUS_CANCELLED
+            order.cancel_reason = serializer.validated_data["reason"].strip()
+            order.cancelled_at = timezone.now()
+            order.save(update_fields=["status", "cancel_reason", "cancelled_at", "updated_at"])
 
         return Response(OrderSerializer(order).data, status=status.HTTP_200_OK)
+
+
+class VendorOrderListAPIView(APIView):
+    authentication_classes = [CsrfExemptSessionAuthentication, JWTAuthentication]
+    permission_classes = [permissions.IsAuthenticated, IsVendor]
+
+    def get(self, request):
+        vendor = getattr(request.user, "vendor_profile", None)
+        if not vendor:
+            return Response({"detail": "Vendor profile not found"}, status=status.HTTP_400_BAD_REQUEST)
+
+        vendor_status = str(request.query_params.get("vendorStatus", "")).strip().lower()
+        order_status = str(request.query_params.get("orderStatus", "")).strip().lower()
+        query = str(request.query_params.get("q", "")).strip().lower()
+
+        items = (
+            OrderItem.objects.filter(vendor=vendor)
+            .select_related("order", "order__customer", "order__shipping_detail", "product")
+            .order_by("-created_at")
+        )
+        if vendor_status in {
+            OrderItem.VENDOR_STATUS_PENDING,
+            OrderItem.VENDOR_STATUS_ACCEPTED,
+            OrderItem.VENDOR_STATUS_REJECTED,
+            OrderItem.VENDOR_STATUS_SHIPPED,
+        }:
+            items = items.filter(vendor_status=vendor_status)
+        if order_status in {
+            Order.STATUS_PENDING,
+            Order.STATUS_CONFIRMED,
+            Order.STATUS_SHIPPED,
+            Order.STATUS_DELIVERED,
+            Order.STATUS_CANCELLED,
+        }:
+            items = items.filter(order__status=order_status)
+        if query:
+            if query.isdigit():
+                items = items.filter(order_id=int(query))
+            else:
+                items = items.filter(product_name__icontains=query)
+
+        return Response(VendorOrderItemSerializer(items, many=True).data, status=status.HTTP_200_OK)
+
+
+class VendorOrderItemStatusAPIView(APIView):
+    authentication_classes = [CsrfExemptSessionAuthentication, JWTAuthentication]
+    permission_classes = [permissions.IsAuthenticated, IsVendor]
+
+    def patch(self, request, item_id):
+        vendor = getattr(request.user, "vendor_profile", None)
+        if not vendor:
+            return Response({"detail": "Vendor profile not found"}, status=status.HTTP_400_BAD_REQUEST)
+
+        item = (
+            OrderItem.objects.select_related("order", "product")
+            .filter(id=item_id, vendor=vendor)
+            .first()
+        )
+        if not item:
+            return Response({"detail": "Order item not found"}, status=status.HTTP_404_NOT_FOUND)
+        if item.order.status == Order.STATUS_CANCELLED:
+            return Response({"detail": "Order already cancelled by customer."}, status=status.HTTP_400_BAD_REQUEST)
+
+        serializer = VendorOrderItemStatusUpdateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        next_status = serializer.validated_data["status"]
+        reason = str(serializer.validated_data.get("reason", "")).strip()
+
+        valid_transitions = {
+            OrderItem.VENDOR_STATUS_PENDING: {
+                OrderItem.VENDOR_STATUS_ACCEPTED,
+                OrderItem.VENDOR_STATUS_REJECTED,
+            },
+            OrderItem.VENDOR_STATUS_ACCEPTED: {
+                OrderItem.VENDOR_STATUS_SHIPPED,
+                OrderItem.VENDOR_STATUS_REJECTED,
+            },
+            OrderItem.VENDOR_STATUS_REJECTED: set(),
+            OrderItem.VENDOR_STATUS_SHIPPED: set(),
+        }
+        allowed = valid_transitions.get(item.vendor_status, set())
+        if next_status not in allowed:
+            return Response(
+                {"detail": f"Invalid status transition from {item.vendor_status} to {next_status}."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if next_status == OrderItem.VENDOR_STATUS_REJECTED and len(reason) < 5:
+            return Response({"detail": "Rejection reason is required (min 5 chars)."}, status=status.HTTP_400_BAD_REQUEST)
+
+        with transaction.atomic():
+            locked_item = OrderItem.objects.select_for_update().select_related("product", "order").get(id=item.id)
+            locked_item.vendor_status = next_status
+            locked_item.vendor_action_note = reason if next_status == OrderItem.VENDOR_STATUS_REJECTED else ""
+            locked_item.vendor_status_updated_at = timezone.now()
+
+            if next_status == OrderItem.VENDOR_STATUS_REJECTED and not locked_item.stock_restored:
+                locked_item.product.stock_quantity += locked_item.quantity
+                locked_item.product.save(update_fields=["stock_quantity", "updated_at"])
+                locked_item.stock_restored = True
+
+            locked_item.save(
+                update_fields=[
+                    "vendor_status",
+                    "vendor_action_note",
+                    "vendor_status_updated_at",
+                    "stock_restored",
+                ]
+            )
+            sync_order_status_from_items(locked_item.order)
+
+        refreshed = (
+            OrderItem.objects.select_related("order", "order__customer", "order__shipping_detail", "product")
+            .get(id=item.id)
+        )
+        return Response(VendorOrderItemSerializer(refreshed).data, status=status.HTTP_200_OK)
+
+
+class VendorOrderSummaryAPIView(APIView):
+    authentication_classes = [CsrfExemptSessionAuthentication, JWTAuthentication]
+    permission_classes = [permissions.IsAuthenticated, IsVendor]
+
+    def get(self, request):
+        vendor = getattr(request.user, "vendor_profile", None)
+        if not vendor:
+            return Response({"detail": "Vendor profile not found"}, status=status.HTTP_400_BAD_REQUEST)
+
+        base_qs = OrderItem.objects.filter(vendor=vendor)
+        summary = {
+            "totalItems": base_qs.count(),
+            "pendingItems": base_qs.filter(vendor_status=OrderItem.VENDOR_STATUS_PENDING).count(),
+            "acceptedItems": base_qs.filter(vendor_status=OrderItem.VENDOR_STATUS_ACCEPTED).count(),
+            "rejectedItems": base_qs.filter(vendor_status=OrderItem.VENDOR_STATUS_REJECTED).count(),
+            "shippedItems": base_qs.filter(vendor_status=OrderItem.VENDOR_STATUS_SHIPPED).count(),
+        }
+        return Response(summary, status=status.HTTP_200_OK)
 
 
 @csrf_exempt

@@ -95,6 +95,33 @@ const useProductsStore = create((set, get) => ({
     return newProduct;
   },
 
+  upsertVendorProduct: (product) => {
+    const { vendorProducts, inventoryById, nextVendorProductId } = get();
+    const normalized = withDefaults({
+      ...product,
+      id: Number(product?.id),
+      title: product?.title || product?.name || "Untitled Product",
+      stock: Number(product?.stock ?? product?.stock_quantity ?? 0),
+      createdAt: product?.createdAt || product?.created_at || new Date().toISOString(),
+      status:
+        product?.status ||
+        (typeof product?.is_active === "boolean" ? (product.is_active ? "active" : "draft") : "active"),
+    });
+
+    const exists = vendorProducts.some((p) => String(p.id) === String(normalized.id));
+    const nextVendorProducts = exists
+      ? vendorProducts.map((p) => (String(p.id) === String(normalized.id) ? normalized : p))
+      : [normalized, ...vendorProducts];
+
+    get()._persist({
+      vendorProducts: nextVendorProducts,
+      inventoryById,
+      nextVendorProductId,
+    });
+
+    return normalized;
+  },
+
   // Checkout mutation hook for mock backend readiness.
   applyCheckout: (items) => {
     const { inventoryById, vendorProducts, nextVendorProductId } = get();

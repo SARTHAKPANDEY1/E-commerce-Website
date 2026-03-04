@@ -235,6 +235,17 @@ class OrderShippingDetail(models.Model):
 
 
 class OrderItem(models.Model):
+    VENDOR_STATUS_PENDING = "pending"
+    VENDOR_STATUS_ACCEPTED = "accepted"
+    VENDOR_STATUS_REJECTED = "rejected"
+    VENDOR_STATUS_SHIPPED = "shipped"
+    VENDOR_STATUS_CHOICES = [
+        (VENDOR_STATUS_PENDING, "Pending"),
+        (VENDOR_STATUS_ACCEPTED, "Accepted"),
+        (VENDOR_STATUS_REJECTED, "Rejected"),
+        (VENDOR_STATUS_SHIPPED, "Shipped"),
+    ]
+
     order = models.ForeignKey(
         Order,
         on_delete=models.CASCADE,
@@ -255,6 +266,10 @@ class OrderItem(models.Model):
     line_total = models.DecimalField(max_digits=12, decimal_places=2)
     product_name = models.CharField(max_length=200, blank=True)
     product_image_url = models.URLField(blank=True)
+    vendor_status = models.CharField(max_length=20, choices=VENDOR_STATUS_CHOICES, default=VENDOR_STATUS_PENDING)
+    vendor_action_note = models.CharField(max_length=500, blank=True)
+    vendor_status_updated_at = models.DateTimeField(null=True, blank=True)
+    stock_restored = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:

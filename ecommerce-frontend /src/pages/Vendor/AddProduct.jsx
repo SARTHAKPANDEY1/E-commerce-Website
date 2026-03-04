@@ -5,6 +5,7 @@ import { BadgeCheck, Boxes, Building2, PackagePlus, FileText, CircleDollarSign, 
 import { useState } from "react";
 import useAuthStore from "../../store/auth.store";
 import useProductsStore from "../../store/products.store";
+import { createVendorProduct } from "../../services/api/vendor.api";
 import { formatCurrency } from "../../utils/formatCurrency";
 
 export default function AddProduct() {
@@ -12,6 +13,7 @@ export default function AddProduct() {
   const queryClient = useQueryClient();
   const user = useAuthStore((s) => s.user);
   const addVendorProduct = useProductsStore((s) => s.addVendorProduct);
+  const upsertVendorProduct = useProductsStore((s) => s.upsertVendorProduct);
 
   const {
     register,
@@ -53,7 +55,7 @@ export default function AddProduct() {
     reader.readAsDataURL(file);
   }
 
-  function onSubmit(values) {
+  async function onSubmit(values) {
     const finalImage = imageMode === "upload" ? uploadedImage : String(values.image || "").trim();
 
     if (!finalImage) {
@@ -64,17 +66,36 @@ export default function AddProduct() {
       return;
     }
 
-    const product = addVendorProduct(
-      {
+    let product = null;
+    try {
+      product = await createVendorProduct({
         ...values,
         price: Number(values.price),
         stock: Number(values.stock),
         image: finalImage,
-      },
-      user
-    );
+      });
+      product = upsertVendorProduct({
+        ...product,
+        image: finalImage,
+        vendorId: user?.id || product.vendorId,
+        vendorName: user?.organizationName || user?.name || product.vendorName,
+      });
+    } catch (error) {
+      // Keep existing local fallback so feature doesn't break if API is unavailable.
+      product = addVendorProduct(
+        {
+          ...values,
+          price: Number(values.price),
+          stock: Number(values.stock),
+          image: finalImage,
+        },
+        user
+      );
+    }
 
     queryClient.invalidateQueries({ queryKey: ["products"] });
+    queryClient.invalidateQueries({ queryKey: ["vendor-products"] });
+    queryClient.invalidateQueries({ queryKey: ["vendor-order-summary"] });
     queryClient.invalidateQueries({ queryKey: ["categories"] });
     queryClient.invalidateQueries({ queryKey: ["product", String(product.id)] });
 

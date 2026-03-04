@@ -152,6 +152,9 @@ class OrderItemSerializer(serializers.ModelSerializer):
     vendorId = serializers.IntegerField(source="vendor_id", read_only=True)
     vendorName = serializers.CharField(source="vendor.business_name", read_only=True)
     productImage = serializers.CharField(source="product_image_url", read_only=True)
+    vendorStatus = serializers.CharField(source="vendor_status", read_only=True)
+    vendorActionNote = serializers.CharField(source="vendor_action_note", read_only=True)
+    stockRestored = serializers.BooleanField(source="stock_restored", read_only=True)
 
     class Meta:
         model = OrderItem
@@ -162,6 +165,9 @@ class OrderItemSerializer(serializers.ModelSerializer):
             "productImage",
             "vendorId",
             "vendorName",
+            "vendorStatus",
+            "vendorActionNote",
+            "stockRestored",
             "quantity",
             "unit_price",
             "line_total",
@@ -244,3 +250,101 @@ class OrderSerializer(serializers.ModelSerializer):
 
 class CancelOrderSerializer(serializers.Serializer):
     reason = serializers.CharField(min_length=5, max_length=500)
+
+
+class VendorOrderItemSerializer(serializers.ModelSerializer):
+    orderId = serializers.IntegerField(source="order_id", read_only=True)
+    orderStatus = serializers.CharField(source="order.status", read_only=True)
+    orderPlacedAt = serializers.DateTimeField(source="order.placed_at", read_only=True)
+    customerName = serializers.CharField(source="order.customer.name", read_only=True)
+    customerEmail = serializers.CharField(source="order.customer.email", read_only=True)
+    shippingFullName = serializers.SerializerMethodField()
+    shippingPhone = serializers.SerializerMethodField()
+    shippingEmail = serializers.SerializerMethodField()
+    shippingAddress = serializers.SerializerMethodField()
+    shippingCity = serializers.SerializerMethodField()
+    shippingState = serializers.SerializerMethodField()
+    shippingPincode = serializers.SerializerMethodField()
+    productId = serializers.IntegerField(source="product_id", read_only=True)
+    productName = serializers.SerializerMethodField()
+    productImage = serializers.CharField(source="product_image_url", read_only=True)
+    totalAmount = serializers.DecimalField(source="order.total_amount", max_digits=12, decimal_places=2, read_only=True)
+    vendorStatus = serializers.CharField(source="vendor_status", read_only=True)
+    vendorActionNote = serializers.CharField(source="vendor_action_note", read_only=True)
+    stockRestored = serializers.BooleanField(source="stock_restored", read_only=True)
+
+    class Meta:
+        model = OrderItem
+        fields = [
+            "id",
+            "orderId",
+            "orderStatus",
+            "orderPlacedAt",
+            "customerName",
+            "customerEmail",
+            "shippingFullName",
+            "shippingPhone",
+            "shippingEmail",
+            "shippingAddress",
+            "shippingCity",
+            "shippingState",
+            "shippingPincode",
+            "productId",
+            "productName",
+            "productImage",
+            "quantity",
+            "unit_price",
+            "line_total",
+            "totalAmount",
+            "vendorStatus",
+            "vendorActionNote",
+            "stockRestored",
+        ]
+
+    def _shipping(self, obj):
+        shipping = getattr(obj.order, "shipping_detail", None)
+        if shipping:
+            return shipping
+        return None
+
+    def get_shippingFullName(self, obj):
+        shipping = self._shipping(obj)
+        return shipping.full_name if shipping else obj.order.shipping_full_name
+
+    def get_shippingPhone(self, obj):
+        shipping = self._shipping(obj)
+        return shipping.phone if shipping else obj.order.shipping_phone
+
+    def get_shippingEmail(self, obj):
+        shipping = self._shipping(obj)
+        return shipping.email if shipping else obj.order.shipping_email
+
+    def get_shippingAddress(self, obj):
+        shipping = self._shipping(obj)
+        return shipping.address if shipping else obj.order.shipping_address
+
+    def get_shippingCity(self, obj):
+        shipping = self._shipping(obj)
+        return shipping.city if shipping else obj.order.shipping_city
+
+    def get_shippingState(self, obj):
+        shipping = self._shipping(obj)
+        return shipping.state if shipping else obj.order.shipping_state
+
+    def get_shippingPincode(self, obj):
+        shipping = self._shipping(obj)
+        return shipping.pincode if shipping else obj.order.shipping_pincode
+
+    def get_productName(self, obj):
+        return obj.product_name or obj.product.name
+
+
+class VendorOrderItemStatusUpdateSerializer(serializers.Serializer):
+    status = serializers.ChoiceField(
+        choices=[
+            OrderItem.VENDOR_STATUS_ACCEPTED,
+            OrderItem.VENDOR_STATUS_REJECTED,
+            OrderItem.VENDOR_STATUS_SHIPPED,
+        ]
+    )
+    reason = serializers.CharField(required=False, allow_blank=True, max_length=500)
