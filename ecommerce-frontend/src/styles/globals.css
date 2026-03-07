@@ -20,6 +20,21 @@ html, body, #root { height: 100%; }
   --ec-shadow-soft: 0 8px 24px rgba(7, 16, 36, 0.06);
 }
 
+:root[data-theme="dark"]{
+  --ec-bg: #050a16;
+  --ec-bg-2:#0b1427;
+  --ec-surface:#121f37;
+  --ec-surface-2:#182946;
+  --ec-border:#324a78;
+  --ec-text:#f8fbff;
+  --ec-muted:#c2d2f1;
+  --ec-primary:#2b4a82;
+  --ec-accent:#7db5ff;
+  --ec-accent-2:#5fd2ff;
+  --ec-shadow: 0 18px 52px rgba(2, 6, 23, 0.56);
+  --ec-shadow-soft: 0 10px 30px rgba(2, 6, 23, 0.4);
+}
+
 body{
   background:
     radial-gradient(900px 500px at -8% -10%, rgba(14,165,233,.20), transparent 65%),
@@ -31,12 +46,23 @@ body{
   letter-spacing: 0.01em;
 }
 
+:root[data-theme="dark"] body{
+  background:
+    radial-gradient(900px 540px at -8% -10%, rgba(56,189,248,.26), transparent 68%),
+    radial-gradient(1200px 740px at 110% 0%, rgba(59,130,246,.2), transparent 74%),
+    linear-gradient(180deg, var(--ec-bg-2), var(--ec-bg));
+}
+
 *{
   border-color: var(--ec-border);
 }
 
 ::selection{
   background: rgba(37,99,235,.2);
+}
+
+:root[data-theme="dark"] ::selection{
+  background: rgba(125,181,255,.35);
 }
 
 ::-webkit-scrollbar{
@@ -142,6 +168,75 @@ body{
   .ec-btn-ghost{
     padding: .78rem 1.2rem;
   }
+}
+
+/* ========= GLOBAL DARK OVERRIDES FOR TAILWIND SLATE/WHITE CLASSES ========= */
+:root[data-theme="dark"] .bg-white,
+:root[data-theme="dark"] .bg-white\/60,
+:root[data-theme="dark"] .bg-white\/65,
+:root[data-theme="dark"] .bg-white\/70,
+:root[data-theme="dark"] .bg-white\/75,
+:root[data-theme="dark"] .bg-white\/80{
+  background-color: rgba(24, 41, 70, 0.92) !important;
+}
+
+:root[data-theme="dark"] .bg-slate-50,
+:root[data-theme="dark"] .bg-slate-50\/70{
+  background-color: rgba(22, 36, 62, 0.92) !important;
+}
+
+:root[data-theme="dark"] .bg-slate-100{
+  background-color: rgba(35, 54, 86, 0.9) !important;
+}
+
+:root[data-theme="dark"] .bg-slate-200{
+  background-color: rgba(44, 67, 104, 0.95) !important;
+}
+
+:root[data-theme="dark"] .text-slate-950,
+:root[data-theme="dark"] .text-slate-900,
+:root[data-theme="dark"] .text-slate-800{
+  color: #f8fbff !important;
+}
+
+:root[data-theme="dark"] .text-slate-700,
+:root[data-theme="dark"] .text-slate-600{
+  color: #d7e5ff !important;
+}
+
+:root[data-theme="dark"] .text-slate-500{
+  color: #bad0f4 !important;
+}
+
+:root[data-theme="dark"] .border-slate-200,
+:root[data-theme="dark"] .border-slate-300,
+:root[data-theme="dark"] .border-slate-300\/70,
+:root[data-theme="dark"] .border-slate-300\/80{
+  border-color: rgba(81, 112, 166, 0.9) !important;
+}
+
+:root[data-theme="dark"] .hover\:bg-slate-50:hover{
+  background-color: rgba(36, 57, 91, 0.94) !important;
+}
+
+:root[data-theme="dark"] .hover\:bg-white:hover{
+  background-color: rgba(36, 57, 91, 0.95) !important;
+}
+
+:root[data-theme="dark"] .placeholder\:text-slate-500::placeholder{
+  color: #aec4ea !important;
+}
+
+:root[data-theme="dark"] input,
+:root[data-theme="dark"] select,
+:root[data-theme="dark"] textarea{
+  color: #f8fbff;
+}
+
+:root[data-theme="dark"] header,
+:root[data-theme="dark"] footer{
+  background: linear-gradient(180deg, rgba(9,16,31,0.96), rgba(12,23,44,0.92)) !important;
+  border-color: rgba(68, 98, 150, 0.75) !important;
 }
 
 /* ========= TOAST ========= */

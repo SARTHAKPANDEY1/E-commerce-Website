@@ -7,6 +7,8 @@ import { listProducts } from "../../services/api/products.api";
 import { cancelMyOrder, getMyOrderDetail, listMyOrders } from "../../services/api/orders.api";
 import { formatCurrency } from "../../utils/formatCurrency";
 import { useState } from "react";
+import SettingsPanel from "../../components/common/SettingsPanel";
+import { t, useAppSettings } from "../../hooks/useAppSettings";
 
 export default function Account() {
   const queryClient = useQueryClient();
@@ -14,6 +16,8 @@ export default function Account() {
   const addItem = useCartStore((s) => s.addItem);
   const [selectedOrderId, setSelectedOrderId] = useState(null);
   const [orderActionError, setOrderActionError] = useState("");
+  const { settings } = useAppSettings();
+  const lang = settings.language;
 
   // Fetch products once, then filter wishlist items
   const { data: products = [], isLoading } = useQuery({
@@ -79,12 +83,17 @@ export default function Account() {
   return (
     <div className="ec-container">
       <div className="py-8">
-        <h1 className="text-2xl sm:text-3xl font-black tracking-tight text-slate-950">
-          My Account
-        </h1>
-        <p className="mt-1 text-slate-700">
-          Manage your profile, wishlist and order history (backend later).
-        </p>
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <h1 className="text-2xl sm:text-3xl font-black tracking-tight text-slate-950">
+              {t(lang, "My Account", "मेरा अकाउंट")}
+            </h1>
+            <p className="mt-1 text-slate-700">
+              {t(lang, "Manage your profile, wishlist and order history (backend later).", "अपनी प्रोफ़ाइल, विशलिस्ट और ऑर्डर इतिहास प्रबंधित करें।")}
+            </p>
+          </div>
+          <SettingsPanel />
+        </div>
 
         <div className="mt-6 grid gap-6 lg:grid-cols-3">
           {/* Profile */}
@@ -101,7 +110,7 @@ export default function Account() {
                   ) : myOrders.length === 0 ? (
                     <>
                       <div className="text-sm text-slate-700 mt-1">
-                        No orders yet. When you place an order, it will appear here.
+                        {t(lang, "No orders yet. When you place an order, it will appear here.", "अभी कोई ऑर्डर नहीं है। ऑर्डर करने पर यहाँ दिखेगा।")}
                       </div>
                       <Link to="/products" className="inline-flex mt-4 ec-btn-primary">
                         Start Shopping

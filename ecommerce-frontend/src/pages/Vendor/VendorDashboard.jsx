@@ -1,5 +1,5 @@
 import { Link } from "react-router-dom";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   AlertTriangle,
@@ -13,6 +13,8 @@ import {
 } from "lucide-react";
 import useAuthStore from "../../store/auth.store";
 import useProductsStore from "../../store/products.store";
+import SettingsPanel from "../../components/common/SettingsPanel";
+import { t, useAppSettings } from "../../hooks/useAppSettings";
 import {
   getVendorOrdersSummary,
   listVendorOrders,
@@ -29,6 +31,16 @@ export default function VendorDashboard() {
   const [tab, setTab] = useState("overview");
   const [orderActionError, setOrderActionError] = useState("");
   const [orderFilter, setOrderFilter] = useState("pending");
+  const { settings } = useAppSettings();
+  const lang = settings.language;
+
+  useEffect(() => {
+    if (settings.preferredOption === "orders") {
+      setTab("orders");
+    } else if (settings.preferredOption === "analytics") {
+      setTab("overview");
+    }
+  }, [settings.preferredOption]);
 
   const {
     data: apiVendorProducts = [],
@@ -148,14 +160,15 @@ export default function VendorDashboard() {
             <div>
               <div className="ec-pill inline-flex">Seller Console</div>
               <h1 className="mt-3 text-2xl sm:text-3xl font-black tracking-tight text-slate-950">
-                Vendor Dashboard
+                {t(lang, "Vendor Dashboard", "वेंडर डैशबोर्ड")}
               </h1>
               <p className="mt-1 text-slate-700">
-                Welcome back, {user?.organizationName || user?.name || "Vendor"}. Here is your business performance snapshot.
+                {t(lang, "Welcome back,", "वापसी पर स्वागत है,")} {user?.organizationName || user?.name || t(lang, "Vendor", "वेंडर")}. {t(lang, "Here is your business performance snapshot.", "यहाँ आपके व्यवसाय का परफॉर्मेंस स्नैपशॉट है।")}
               </p>
             </div>
 
             <div className="flex items-center gap-2">
+              <SettingsPanel />
               <button
                 type="button"
                 onClick={() => setTab("overview")}
@@ -166,7 +179,7 @@ export default function VendorDashboard() {
                     : "border-slate-300 bg-white text-slate-800")
                 }
               >
-                Overview
+                {t(lang, "Overview", "ओवरव्यू")}
               </button>
               <button
                 type="button"
@@ -178,14 +191,14 @@ export default function VendorDashboard() {
                     : "border-slate-300 bg-white text-slate-800")
                 }
               >
-                Orders
+                {t(lang, "Orders", "ऑर्डर्स")}
                 <span className="rounded-full bg-slate-200 px-2 py-0.5 text-[10px] font-black text-slate-900">
                   {orderSummary.pendingItems ?? 0}
                 </span>
               </button>
               <Link to="/vendor/add-product" className="ec-btn-primary inline-flex items-center gap-2 w-fit">
                 <Plus size={16} />
-                Add Product
+                {t(lang, "Add Product", "प्रोडक्ट जोड़ें")}
               </Link>
             </div>
           </div>
